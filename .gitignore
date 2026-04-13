@@ -1,0 +1,15 @@
+.env
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+dist/
+build/
+*.egg-info/
+logs/
+_workspace/
+uploads/*
+!uploads/.gitkeep
+backend/data/
+*.db
