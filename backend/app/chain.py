@@ -1,11 +1,14 @@
-"""RAG 체인 — 검색 + Claude CLI 답변 생성"""
+"""RAG 체인 — 검색 + Claude CLI 답변 생성 (하이브리드)"""
 
 import subprocess
 from .vectorstore import search
 
-_SYSTEM_PROMPT = """당신은 업로드된 문서를 기반으로 질문에 답변하는 AI 어시스턴트입니다.
-아래 문서 내용을 참고하여 정확하게 답변하세요.
-문서에 없는 내용은 "해당 내용은 업로드된 문서에서 찾을 수 없습니다."라고 답하세요."""
+_RAG_PROMPT = """당신은 업로드된 문서를 기반으로 질문에 답변하는 AI 어시스턴트입니다.
+아래 문서 내용을 우선 참고하여 답변하세요.
+문서에 관련 내용이 있으면 문서 기반으로 답변하고, 문서에 없는 내용은 당신의 지식을 활용하여 답변하되
+"[참고: 이 내용은 업로드된 문서가 아닌 AI 자체 지식으로 답변한 것입니다]"라고 명시하세요."""
+
+_GENERAL_PROMPT = """당신은 도움이 되는 AI 어시스턴트입니다. 질문에 정확하고 친절하게 답변하세요."""
 
 
 def _call_claude(prompt: str) -> str:
@@ -22,12 +25,16 @@ def _call_claude(prompt: str) -> str:
 
 
 def ask(question: str) -> dict:
-    """질문 → 유사 문서 검색 → Claude CLI 답변 생성."""
+    """질문 → 유사 문서 검색 → Claude CLI 답변 생성 (하이브리드)."""
     docs = search(question, k=4)
 
     if not docs:
+        prompt = f"""{_GENERAL_PROMPT}
+
+질문: {question}"""
+        answer = _call_claude(prompt)
         return {
-            "answer": "업로드된 문서가 없습니다. 먼저 PDF를 업로드해주세요.",
+            "answer": answer,
             "sources": [],
         }
 
@@ -36,7 +43,7 @@ def ask(question: str) -> dict:
         for doc in docs
     ])
 
-    prompt = f"""{_SYSTEM_PROMPT}
+    prompt = f"""{_RAG_PROMPT}
 
 참고 문서:
 {context}
