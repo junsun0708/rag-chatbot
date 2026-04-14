@@ -1,15 +1,15 @@
-"""벡터DB 관리 — ChromaDB + OpenAI Embedding"""
+"""벡터DB 관리 — ChromaDB + HuggingFace Embedding"""
 
 import os
-from langchain_openai import OpenAIEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
-from .config import OPENAI_API_KEY, CHROMA_DIR
+from .config import CHROMA_DIR
 
 os.makedirs(CHROMA_DIR, exist_ok=True)
 
-_embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+_embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 _splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
 
 
