@@ -1,15 +1,42 @@
+# 환경/시크릿
 .env
+.env.*
+!.env.example
+
+# Python
 .venv/
-node_modules/
 __pycache__/
 *.pyc
-.DS_Store
+*.pyo
+*.egg-info/
+
+# Node.js
+node_modules/
 dist/
 build/
-*.egg-info/
-logs/
-_workspace/
+
+# 데이터 (벡터DB, 업로드 파일)
+backend/data/
 uploads/*
 !uploads/.gitkeep
-backend/data/
 *.db
+
+# 감시 폴더 (사용자 지정 경로이므로 포함 안 함)
+watch_data/
+
+# ONNX 캐시
+onnx_models/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 기타
+logs/
+_workspace/
