@@ -26,6 +26,17 @@ export const docAPI = {
   sources: () => request('/documents/sources'),
 }
 
+export const watcherAPI = {
+  start: (path, scanExisting = true) => request('/watcher/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, scan_existing: scanExisting }),
+  }),
+  stop: () => request('/watcher/stop', { method: 'POST' }),
+  status: () => request('/watcher/status'),
+  logs: (limit = 50) => request(`/watcher/logs?limit=${limit}`),
+}
+
 export const integrationAPI = {
   syncConfluence: (config) => request('/integrations/confluence/sync', {
     method: 'POST',

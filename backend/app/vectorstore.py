@@ -57,6 +57,17 @@ def ingest_text(text: str, source: str, metadata: dict | None = None) -> int:
     return len(chunks)
 
 
+def delete_source(source_name: str) -> int:
+    """특정 소스의 모든 청크를 벡터DB에서 삭제. 삭제된 수 반환."""
+    vectorstore = get_vectorstore()
+    collection = vectorstore._collection
+    results = collection.get(where={"source": source_name}, include=[])
+    ids = results.get("ids", [])
+    if ids:
+        collection.delete(ids=ids)
+    return len(ids)
+
+
 def search(query: str, k: int = 4):
     """유사 문서 검색."""
     vectorstore = get_vectorstore()
