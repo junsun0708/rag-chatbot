@@ -25,3 +25,16 @@ export const docAPI = {
   },
   sources: () => request('/documents/sources'),
 }
+
+export const integrationAPI = {
+  syncConfluence: (config) => request('/integrations/confluence/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  }),
+  syncNotion: (config) => request('/integrations/notion/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  }),
+}

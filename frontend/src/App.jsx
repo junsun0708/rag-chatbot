@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { chatAPI } from './api/client'
 import ChatMessage from './components/ChatMessage'
 import FileUpload from './components/FileUpload'
+import IntegrationPanel from './components/IntegrationPanel'
 import SourceList from './components/SourceList'
 import './index.css'
 
@@ -46,8 +47,9 @@ export default function App() {
       {/* 사이드바 */}
       <div className="w-64 bg-slate-900 border-r border-slate-700 p-4 flex flex-col gap-4">
         <h1 className="text-lg font-bold text-white">RAG Chatbot</h1>
-        <p className="text-xs text-slate-400">PDF를 업로드하고 질문하세요</p>
+        <p className="text-xs text-slate-400">문서를 업로드하고 질문하세요</p>
         <FileUpload onUploaded={() => setRefreshKey(k => k + 1)} />
+        <IntegrationPanel onSynced={() => setRefreshKey(k => k + 1)} />
         <SourceList refreshKey={refreshKey} />
       </div>
 
@@ -59,8 +61,8 @@ export default function App() {
             <div className="h-full flex items-center justify-center">
               <div className="text-center text-slate-500">
                 <p className="text-4xl mb-4">📄💬</p>
-                <p className="text-lg">PDF를 업로드하고 질문해보세요</p>
-                <p className="text-sm mt-2">문서 내용을 기반으로 AI가 답변합니다</p>
+                <p className="text-lg">문서를 업로드하고 질문해보세요</p>
+                <p className="text-sm mt-2">PDF, Word, Excel, 한/글, Confluence, Notion 등 지원</p>
               </div>
             </div>
           )}
