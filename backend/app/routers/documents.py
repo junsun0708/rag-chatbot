@@ -4,25 +4,42 @@ import os
 import uuid
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from ..config import UPLOAD_DIR
-from ..vectorstore import ingest_pdf, list_sources
+from ..vectorstore import ingest_document, list_sources
+from ..loaders import SUPPORTED_EXTENSIONS
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
-ALLOWED_EXTENSIONS = {".pdf"}
-MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB (Excel/HWP 대용량 대비)
+
+# 확장자별 한글 이름 (에러 메시지용)
+EXT_LABELS = {
+    ".pdf": "PDF",
+    ".docx": "Word",
+    ".doc": "Word",
+    ".xlsx": "Excel",
+    ".xls": "Excel",
+    ".hwp": "한/글(HWP)",
+    ".hwpx": "한/글(HWPX)",
+    ".txt": "텍스트",
+    ".md": "마크다운",
+    ".html": "HTML",
+    ".htm": "HTML",
+    ".csv": "CSV",
+}
 
 
 @router.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
     ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(400, f"지원하지 않는 파일 형식입니다. 허용: {ALLOWED_EXTENSIONS}")
+    if ext not in SUPPORTED_EXTENSIONS:
+        supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+        raise HTTPException(400, f"지원하지 않는 파일 형식입니다. 허용: {supported}")
 
     content = await file.read()
     if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(400, f"파일 크기��� {MAX_FILE_SIZE // 1024 // 1024}MB를 초과합니다.")
+        raise HTTPException(400, f"파일 크기가 {MAX_FILE_SIZE // 1024 // 1024}MB를 초과합니다.")
 
     safe_name = f"{uuid.uuid4().hex}_{file.filename}"
     file_path = os.path.join(UPLOAD_DIR, safe_name)
@@ -31,18 +48,33 @@ async def upload_document(file: UploadFile = File(...)):
         f.write(content)
 
     try:
-        chunk_count = ingest_pdf(file_path, file.filename)
+        chunk_count = ingest_document(file_path, file.filename)
     except Exception as e:
         os.unlink(file_path)
         raise HTTPException(500, f"문서 처리 실패: {str(e)}")
 
+    file_type = EXT_LABELS.get(ext, ext.upper())
     return {
         "filename": file.filename,
+        "type": file_type,
         "chunks": chunk_count,
-        "message": f"{file.filename}에서 {chunk_count}개 청크를 추출하여 저장했습니다.",
+        "message": f"{file.filename} ({file_type})에서 {chunk_count}개 청크를 추출하여 저장했습니다.",
     }
 
 
 @router.get("/sources")
 def get_sources():
     return {"sources": list_sources()}
+
+
+@router.get("/supported-formats")
+def get_supported_formats():
+    """지원하는 파일 형식 목록 반환."""
+    formats = []
+    seen = set()
+    for ext, label in sorted(EXT_LABELS.items()):
+        if label not in seen:
+            seen.add(label)
+            exts = [e for e, l in EXT_LABELS.items() if l == label]
+            formats.append({"label": label, "extensions": exts})
+    return {"formats": formats}

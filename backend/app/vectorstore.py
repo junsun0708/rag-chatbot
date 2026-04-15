@@ -1,15 +1,15 @@
-"""벡터DB 관리 — ChromaDB + OpenAI Embedding"""
+"""벡터DB 관리 — ChromaDB + HuggingFace Embedding"""
 
 import os
-from langchain_openai import OpenAIEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyPDFLoader
-from .config import OPENAI_API_KEY, CHROMA_DIR
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from .config import CHROMA_DIR
+from .loaders import load_document
 
 os.makedirs(CHROMA_DIR, exist_ok=True)
 
-_embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+_embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 _splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
 
 
@@ -17,15 +17,39 @@ def get_vectorstore() -> Chroma:
     return Chroma(persist_directory=CHROMA_DIR, embedding_function=_embeddings)
 
 
-def ingest_pdf(file_path: str, filename: str) -> int:
-    """PDF를 청킹 → 임베딩 → ChromaDB에 저장. 저장된 청크 수 반환."""
-    loader = PyPDFLoader(file_path)
-    pages = loader.load()
+def ingest_document(file_path: str, filename: str) -> int:
+    """문서를 로드 → 청킹 → 임베딩 → ChromaDB에 저장. 저장된 청크 수 반환."""
+    pages = load_document(file_path)
 
     for page in pages:
         page.metadata["source"] = filename
 
     chunks = _splitter.split_documents(pages)
+    if not chunks:
+        return 0
+
+    vectorstore = get_vectorstore()
+    vectorstore.add_documents(chunks)
+
+    return len(chunks)
+
+
+# 하위 호환
+ingest_pdf = ingest_document
+
+
+def ingest_text(text: str, source: str, metadata: dict | None = None) -> int:
+    """텍스트 직접 입력 → 청킹 → 임베딩 → ChromaDB에 저장. (Confluence/Notion용)"""
+    from langchain_core.documents import Document
+
+    doc_metadata = {"source": source, "page": 0}
+    if metadata:
+        doc_metadata.update(metadata)
+
+    doc = Document(page_content=text, metadata=doc_metadata)
+    chunks = _splitter.split_documents([doc])
+    if not chunks:
+        return 0
 
     vectorstore = get_vectorstore()
     vectorstore.add_documents(chunks)
