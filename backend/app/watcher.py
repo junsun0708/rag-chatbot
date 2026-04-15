@@ -62,6 +62,10 @@ class _DocHandler(FileSystemEventHandler):
         time.sleep(0.5)
         try:
             chunks = ingest_document(path, filename)
+            if chunks == -1:
+                self._watcher._add_log("중복건너뜀", filename, 0)
+                logger.info("Skipped duplicate: %s", filename)
+                return
             self._watcher._add_log("인덱싱", filename, chunks)
             logger.info("Indexed: %s (%d chunks)", filename, chunks)
         except Exception as e:

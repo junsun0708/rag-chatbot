@@ -4,7 +4,7 @@ import os
 import uuid
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from ..config import UPLOAD_DIR
-from ..vectorstore import ingest_document, list_sources
+from ..vectorstore import ingest_document, list_sources, get_stats
 from ..loaders import SUPPORTED_EXTENSIONS
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -54,10 +54,21 @@ async def upload_document(file: UploadFile = File(...)):
         raise HTTPException(500, f"문서 처리 실패: {str(e)}")
 
     file_type = EXT_LABELS.get(ext, ext.upper())
+
+    if chunk_count == -1:
+        return {
+            "filename": file.filename,
+            "type": file_type,
+            "chunks": 0,
+            "duplicate": True,
+            "message": f"{file.filename}은 이미 동일한 내용으로 인덱싱되어 있어 건너뛰었습니다.",
+        }
+
     return {
         "filename": file.filename,
         "type": file_type,
         "chunks": chunk_count,
+        "duplicate": False,
         "message": f"{file.filename} ({file_type})에서 {chunk_count}개 청크를 추출하여 저장했습니다.",
     }
 
@@ -78,3 +89,9 @@ def get_supported_formats():
             exts = [e for e, l in EXT_LABELS.items() if l == label]
             formats.append({"label": label, "extensions": exts})
     return {"formats": formats}
+
+
+@router.get("/stats")
+def get_document_stats():
+    """벡터DB 통계 및 최적화 설정 반환."""
+    return get_stats()
