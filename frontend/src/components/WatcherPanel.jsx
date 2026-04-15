@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { watcherAPI } from '../api/client'
 
 export default function WatcherPanel({ onChanged }) {
@@ -8,20 +8,22 @@ export default function WatcherPanel({ onChanged }) {
   const [loading, setLoading] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
 
-  const fetchStatus = async () => {
+  const fetchStatus = useCallback(async () => {
     try {
       const data = await watcherAPI.status()
       setStatus(data)
       if (data.running && data.path) setPath(data.path)
       setLogs(data.recent_logs || [])
-    } catch { /* ignore */ }
-  }
+    } catch (_err) {
+      // 서버 미응답 시 무시
+    }
+  }, [])
 
   useEffect(() => {
     fetchStatus()
     const interval = setInterval(fetchStatus, 5000)
     return () => clearInterval(interval)
-  }, [])
+  }, [fetchStatus])
 
   const handleStart = async () => {
     if (!path.trim()) return
@@ -31,7 +33,7 @@ export default function WatcherPanel({ onChanged }) {
       await fetchStatus()
       if (onChanged) onChanged()
     } catch (err) {
-      alert(`실패: ${err.message}`)
+      alert('실패: ' + err.message)
     } finally {
       setLoading(false)
     }
@@ -42,8 +44,11 @@ export default function WatcherPanel({ onChanged }) {
     try {
       await watcherAPI.stop()
       await fetchStatus()
-    } catch { /* ignore */ }
-    finally { setLoading(false) }
+    } catch (_err) {
+      // ignore
+    } finally {
+      setLoading(false)
+    }
   }
 
   const running = status?.running
@@ -100,10 +105,10 @@ export default function WatcherPanel({ onChanged }) {
           {showLogs && (
             <div className="mt-1 max-h-32 overflow-y-auto space-y-0.5">
               {[...logs].reverse().map((log, i) => (
-                <p key={i} className={`text-[10px] ${log.error ? 'text-red-400' : 'text-slate-500'}`}>
+                <p key={i} className={'text-[10px] ' + (log.error ? 'text-red-400' : 'text-slate-500')}>
                   {log.time?.slice(11)} {log.action} — {log.target}
-                  {log.chunks > 0 && ` (${log.chunks})`}
-                  {log.error && ` ⚠ ${log.error}`}
+                  {log.chunks > 0 ? ' (' + log.chunks + ')' : ''}
+                  {log.error ? ' ⚠ ' + log.error : ''}
                 </p>
               ))}
             </div>
