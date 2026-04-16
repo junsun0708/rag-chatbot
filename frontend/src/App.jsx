@@ -3,6 +3,7 @@ import { chatAPI } from './api/client'
 import ChatMessage from './components/ChatMessage'
 import FileUpload from './components/FileUpload'
 import IntegrationPanel from './components/IntegrationPanel'
+import WatcherPanel from './components/WatcherPanel'
 import SourceList from './components/SourceList'
 import './index.css'
 
@@ -49,6 +50,7 @@ export default function App() {
         <h1 className="text-lg font-bold text-white">RAG Chatbot</h1>
         <p className="text-xs text-slate-400">문서를 업로드하고 질문하세요</p>
         <FileUpload onUploaded={() => setRefreshKey(k => k + 1)} />
+        <WatcherPanel onChanged={() => setRefreshKey(k => k + 1)} />
         <IntegrationPanel onSynced={() => setRefreshKey(k => k + 1)} />
         <SourceList refreshKey={refreshKey} />
       </div>

@@ -8,6 +8,8 @@ langchain-community
 chromadb
 pypdf
 sentence-transformers
+# 폴더 감시
+watchdog
 # 문서 형식 확장
 docx2txt
 openpyxl
