@@ -87,7 +87,7 @@ class FolderWatcher:
 
     def add_path(self, path: str, scan_existing: bool = True) -> dict:
         """감시 폴더 추가."""
-        path = os.path.expanduser(os.path.abspath(path))
+        path = os.path.realpath(os.path.expanduser(path))
         if not os.path.isdir(path):
             raise ValueError(f"디렉토리가 존재하지 않습니다: {path}")
         if path in self._paths:
@@ -109,7 +109,7 @@ class FolderWatcher:
 
     def remove_path(self, path: str) -> dict:
         """감시 폴더 제거."""
-        path = os.path.expanduser(os.path.abspath(path))
+        path = os.path.realpath(os.path.expanduser(path))
         watch = self._paths.pop(path, None)
         if watch is None:
             raise ValueError(f"감시 중이 아닌 폴더입니다: {path}")
