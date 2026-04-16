@@ -27,10 +27,15 @@ export const docAPI = {
 }
 
 export const watcherAPI = {
-  start: (path, scanExisting = true) => request('/watcher/start', {
+  add: (path, scanExisting = true) => request('/watcher/add', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path, scan_existing: scanExisting }),
+  }),
+  remove: (path) => request('/watcher/remove', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
   }),
   stop: () => request('/watcher/stop', { method: 'POST' }),
   status: () => request('/watcher/status'),

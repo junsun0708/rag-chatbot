@@ -1,4 +1,4 @@
-"""폴더 감시 — watchdog 기반 자동 문서 인덱싱"""
+"""폴더 감시 — watchdog 기반 자동 문서 인덱싱 (다중 폴더 지원)"""
 
 import os
 import time
@@ -52,7 +52,6 @@ class _DocHandler(FileSystemEventHandler):
             filename = os.path.basename(event.src_path)
             delete_source(filename)
             self._watcher._add_log("삭제", filename, 0)
-            logger.info("Deleted from index: %s", filename)
 
     def _ingest(self, path: str):
         filename = os.path.basename(path)
@@ -61,100 +60,106 @@ class _DocHandler(FileSystemEventHandler):
             chunks = ingest_document(path, filename)
             if chunks == -1:
                 self._watcher._add_log("중복건너뜀", filename, 0)
-                logger.info("Skipped duplicate: %s", filename)
                 return
             self._watcher._add_log("인덱싱", filename, chunks)
-            logger.info("Indexed: %s (%d chunks)", filename, chunks)
         except Exception as e:
             self._watcher._add_log("실패", filename, 0, str(e))
             logger.error("Failed to index %s: %s", filename, e)
 
 
 class FolderWatcher:
-    """폴더 감시 매니저 — 시작/중지, 상태 조회, 로그 관리."""
+    """다중 폴더 감시 매니저."""
 
     def __init__(self):
         self._observer: Observer | None = None
-        self._watch_path: str = ""
-        self._running = False
-        self._scanning = False
-        self._scan_thread: threading.Thread | None = None
+        self._paths: dict[str, object] = {}  # path → watch handle
+        self._scanning_paths: set[str] = set()
         self._logs: list[dict] = []
         self._max_logs = 100
         self._lock = threading.Lock()
+        self._handler = _DocHandler(self)
 
-    @property
-    def is_running(self) -> bool:
-        return self._running
+    def _ensure_observer(self):
+        """Observer가 없으면 생성 및 시작."""
+        if self._observer is None:
+            self._observer = Observer()
+            self._observer.start()
 
-    @property
-    def watch_path(self) -> str:
-        return self._watch_path
-
-    def start(self, path: str, scan_existing: bool = True) -> dict:
-        """감시 시작. 기존 파일 스캔은 백그라운드에서 비동기 실행."""
-        path = os.path.expanduser(path)
+    def add_path(self, path: str, scan_existing: bool = True) -> dict:
+        """감시 폴더 추가."""
+        path = os.path.expanduser(os.path.abspath(path))
         if not os.path.isdir(path):
             raise ValueError(f"디렉토리가 존재하지 않습니다: {path}")
+        if path in self._paths:
+            raise ValueError(f"이미 감시 중인 폴더입니다: {path}")
 
-        if self._running:
-            self.stop()
+        self._ensure_observer()
+        watch = self._observer.schedule(self._handler, path, recursive=True)
+        self._paths[path] = watch
 
-        self._watch_path = path
-        self._observer = Observer()
-        handler = _DocHandler(self)
-        self._observer.schedule(handler, path, recursive=True)
-        self._observer.start()
-        self._running = True
+        self._add_log("추가", path, 0)
+        logger.info("Watch added: %s", path)
 
-        self._add_log("시작", path, 0)
-        logger.info("Watcher started: %s", path)
-
-        # 기존 파일 스캔을 백그라운드 스레드에서 실행 (API 블로킹 방지)
         if scan_existing:
-            self._scanning = True
-            self._scan_thread = threading.Thread(
-                target=self._scan_existing_bg, args=(path,), daemon=True
-            )
-            self._scan_thread.start()
+            self._scanning_paths.add(path)
+            t = threading.Thread(target=self._scan_bg, args=(path,), daemon=True)
+            t.start()
 
-        return {
-            "status": "started",
-            "path": path,
-        }
+        return {"status": "added", "path": path, "total_paths": len(self._paths)}
 
-    def stop(self) -> dict:
-        """감시 중지."""
-        if self._observer and self._running:
+    def remove_path(self, path: str) -> dict:
+        """감시 폴더 제거."""
+        path = os.path.expanduser(os.path.abspath(path))
+        watch = self._paths.pop(path, None)
+        if watch is None:
+            raise ValueError(f"감시 중이 아닌 폴더입니다: {path}")
+
+        self._observer.unschedule(watch)
+        self._scanning_paths.discard(path)
+        self._add_log("제거", path, 0)
+        logger.info("Watch removed: %s", path)
+
+        # 감시 폴더가 없으면 observer도 정리
+        if not self._paths:
+            self._stop_observer()
+
+        return {"status": "removed", "path": path, "total_paths": len(self._paths)}
+
+    def stop_all(self) -> dict:
+        """모든 감시 중지."""
+        self._paths.clear()
+        self._scanning_paths.clear()
+        self._stop_observer()
+        self._add_log("전체중지", "", 0)
+        logger.info("All watches stopped")
+        return {"status": "stopped"}
+
+    def _stop_observer(self):
+        if self._observer:
             self._observer.stop()
             self._observer.join(timeout=5)
             self._observer = None
-            self._running = False
-            self._scanning = False
-            self._add_log("중지", self._watch_path, 0)
-            logger.info("Watcher stopped")
-        return {"status": "stopped"}
 
     def status(self) -> dict:
         return {
-            "running": self._running,
-            "scanning": self._scanning,
-            "path": self._watch_path,
+            "running": len(self._paths) > 0,
+            "paths": list(self._paths.keys()),
+            "scanning": list(self._scanning_paths),
             "recent_logs": self._logs[-20:],
         }
 
     def get_logs(self, limit: int = 50) -> list[dict]:
         return self._logs[-limit:]
 
-    def _scan_existing_bg(self, path: str):
+    def _scan_bg(self, path: str):
         """백그라운드에서 기존 파일 스캔."""
         count = 0
         try:
             for root, _, files in os.walk(path):
-                if not self._running:
+                if path not in self._paths:
                     break
                 for fname in files:
-                    if not self._running:
+                    if path not in self._paths:
                         break
                     ext = os.path.splitext(fname)[1].lower()
                     if ext not in SUPPORTED_EXTENSIONS:
@@ -169,12 +174,10 @@ class FolderWatcher:
                             count += 1
                     except Exception as e:
                         self._add_log("실패", fname, 0, str(e))
-                        logger.error("Scan failed: %s — %s", fname, e)
         finally:
-            self._scanning = False
-            if self._running:
-                self._add_log("스캔완료", f"{count}개 파일 처리", 0)
-            logger.info("Background scan done: %d files", count)
+            self._scanning_paths.discard(path)
+            if path in self._paths:
+                self._add_log("스캔완료", f"{path} ({count}개 파일)", 0)
 
     def _add_log(self, action: str, target: str, chunks: int, error: str = ""):
         with self._lock:
@@ -189,5 +192,4 @@ class FolderWatcher:
                 self._logs = self._logs[-self._max_logs:]
 
 
-# 싱글턴 인스턴스
 folder_watcher = FolderWatcher()
