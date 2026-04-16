@@ -90,7 +90,9 @@ export default function WatcherPanel({ onChanged }) {
       {running && (
         <div className="flex items-center gap-1">
           <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
-          <span className="text-[10px] text-emerald-400">감시 중</span>
+          <span className="text-[10px] text-emerald-400">
+            {status?.scanning ? '초기 스캔 중...' : '감시 중'}
+          </span>
         </div>
       )}
 

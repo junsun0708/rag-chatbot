@@ -18,7 +18,6 @@ class _DocHandler(FileSystemEventHandler):
 
     def __init__(self, watcher: "FolderWatcher"):
         self._watcher = watcher
-        # 중복 이벤트 방지 (같은 파일 1초 내 재처리 차단)
         self._recent: dict[str, float] = {}
 
     def _should_process(self, path: str) -> bool:
@@ -41,7 +40,6 @@ class _DocHandler(FileSystemEventHandler):
         if event.is_directory:
             return
         if self._should_process(event.src_path):
-            # 수정 시 기존 벡터 삭제 후 재인덱싱
             filename = os.path.basename(event.src_path)
             delete_source(filename)
             self._ingest(event.src_path)
@@ -58,7 +56,6 @@ class _DocHandler(FileSystemEventHandler):
 
     def _ingest(self, path: str):
         filename = os.path.basename(path)
-        # 파일 쓰기 완료 대기 (대용량 파일 복사 중 읽기 방지)
         time.sleep(0.5)
         try:
             chunks = ingest_document(path, filename)
@@ -80,6 +77,8 @@ class FolderWatcher:
         self._observer: Observer | None = None
         self._watch_path: str = ""
         self._running = False
+        self._scanning = False
+        self._scan_thread: threading.Thread | None = None
         self._logs: list[dict] = []
         self._max_logs = 100
         self._lock = threading.Lock()
@@ -93,12 +92,11 @@ class FolderWatcher:
         return self._watch_path
 
     def start(self, path: str, scan_existing: bool = True) -> dict:
-        """감시 시작. scan_existing=True면 기존 파일도 인덱싱."""
+        """감시 시작. 기존 파일 스캔은 백그라운드에서 비동기 실행."""
         path = os.path.expanduser(path)
         if not os.path.isdir(path):
             raise ValueError(f"디렉토리가 존재하지 않습니다: {path}")
 
-        # 기존 감시 중이면 중지
         if self._running:
             self.stop()
 
@@ -112,15 +110,17 @@ class FolderWatcher:
         self._add_log("시작", path, 0)
         logger.info("Watcher started: %s", path)
 
-        # 기존 파일 스캔
-        indexed = 0
+        # 기존 파일 스캔을 백그라운드 스레드에서 실행 (API 블로킹 방지)
         if scan_existing:
-            indexed = self._scan_existing(path)
+            self._scanning = True
+            self._scan_thread = threading.Thread(
+                target=self._scan_existing_bg, args=(path,), daemon=True
+            )
+            self._scan_thread.start()
 
         return {
             "status": "started",
             "path": path,
-            "existing_files_indexed": indexed,
         }
 
     def stop(self) -> dict:
@@ -130,6 +130,7 @@ class FolderWatcher:
             self._observer.join(timeout=5)
             self._observer = None
             self._running = False
+            self._scanning = False
             self._add_log("중지", self._watch_path, 0)
             logger.info("Watcher stopped")
         return {"status": "stopped"}
@@ -137,6 +138,7 @@ class FolderWatcher:
     def status(self) -> dict:
         return {
             "running": self._running,
+            "scanning": self._scanning,
             "path": self._watch_path,
             "recent_logs": self._logs[-20:],
         }
@@ -144,23 +146,35 @@ class FolderWatcher:
     def get_logs(self, limit: int = 50) -> list[dict]:
         return self._logs[-limit:]
 
-    def _scan_existing(self, path: str) -> int:
-        """디렉토리 내 기존 파일 전부 인덱싱."""
+    def _scan_existing_bg(self, path: str):
+        """백그라운드에서 기존 파일 스캔."""
         count = 0
-        for root, _, files in os.walk(path):
-            for fname in files:
-                ext = os.path.splitext(fname)[1].lower()
-                if ext not in SUPPORTED_EXTENSIONS:
-                    continue
-                fpath = os.path.join(root, fname)
-                try:
-                    chunks = ingest_document(fpath, fname)
-                    self._add_log("초기스캔", fname, chunks)
-                    count += 1
-                except Exception as e:
-                    self._add_log("실패", fname, 0, str(e))
-                    logger.error("Scan failed: %s — %s", fname, e)
-        return count
+        try:
+            for root, _, files in os.walk(path):
+                if not self._running:
+                    break
+                for fname in files:
+                    if not self._running:
+                        break
+                    ext = os.path.splitext(fname)[1].lower()
+                    if ext not in SUPPORTED_EXTENSIONS:
+                        continue
+                    fpath = os.path.join(root, fname)
+                    try:
+                        chunks = ingest_document(fpath, fname)
+                        if chunks == -1:
+                            self._add_log("중복건너뜀", fname, 0)
+                        else:
+                            self._add_log("초기스캔", fname, chunks)
+                            count += 1
+                    except Exception as e:
+                        self._add_log("실패", fname, 0, str(e))
+                        logger.error("Scan failed: %s — %s", fname, e)
+        finally:
+            self._scanning = False
+            if self._running:
+                self._add_log("스캔완료", f"{count}개 파일 처리", 0)
+            logger.info("Background scan done: %d files", count)
 
     def _add_log(self, action: str, target: str, chunks: int, error: str = ""):
         with self._lock:
