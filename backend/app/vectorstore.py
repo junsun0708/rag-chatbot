@@ -3,16 +3,23 @@
 import hashlib
 import logging
 import os
+import threading
+import time
+
 from langchain_community.vectorstores import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from .config import (
     CHROMA_DIR, CHUNK_SIZE, CHUNK_OVERLAP,
     EMBEDDING_MODEL, EMBEDDING_QUANTIZE, DEDUP_ENABLED,
 )
+from .exceptions import DocumentError
 from .loaders import load_document
 
 logger = logging.getLogger(__name__)
 os.makedirs(CHROMA_DIR, exist_ok=True)
+
+# ── 동시성 제어 ──────────────────────────────────────────────
+_db_lock = threading.Lock()
 
 # ── 임베딩 모델 초기화 (양자화 지원) ───────────────────────
 
@@ -85,8 +92,15 @@ def get_vectorstore() -> Chroma:
 
 def ingest_document(file_path: str, filename: str) -> int:
     """문서를 로드 → 중복 확인 → 청킹 → 임베딩 → ChromaDB에 저장."""
-    pages = load_document(file_path)
+    start = time.time()
+    try:
+        pages = load_document(file_path)
+    except Exception as e:
+        logger.exception("문서 로드 실패: %s", filename)
+        raise DocumentError(f"문서를 로드할 수 없습니다: {filename}") from e
+
     if not pages:
+        logger.warning("빈 문서: %s", filename)
         return 0
 
     # 전체 텍스트 해시로 중복 확인
@@ -97,20 +111,23 @@ def ingest_document(file_path: str, filename: str) -> int:
         logger.info("중복 문서 건너뜀: %s", filename)
         return -1  # -1 = 중복
 
-    # 같은 파일명의 이전 버전 삭제 (수정된 문서 재인덱싱)
-    delete_source(filename)
+    with _db_lock:
+        # 같은 파일명의 이전 버전 삭제 (수정된 문서 재인덱싱)
+        _delete_source_unlocked(filename)
 
-    for page in pages:
-        page.metadata["source"] = filename
-        page.metadata["content_hash"] = content_hash
+        for page in pages:
+            page.metadata["source"] = filename
+            page.metadata["content_hash"] = content_hash
 
-    chunks = _splitter.split_documents(pages)
-    if not chunks:
-        return 0
+        chunks = _splitter.split_documents(pages)
+        if not chunks:
+            return 0
 
-    vectorstore = get_vectorstore()
-    vectorstore.add_documents(chunks)
+        vectorstore = get_vectorstore()
+        vectorstore.add_documents(chunks)
 
+    elapsed = time.time() - start
+    logger.info("인덱싱 완료: %s | %d 청크 | %.2f초", filename, len(chunks), elapsed)
     return len(chunks)
 
 
@@ -120,14 +137,13 @@ ingest_pdf = ingest_document
 
 def ingest_text(text: str, source: str, metadata: dict | None = None) -> int:
     """텍스트 직접 입력 → 청킹 → 임베딩 → ChromaDB에 저장. (Confluence/Notion용)"""
+    start = time.time()
     from langchain_core.documents import Document
 
     content_hash = _content_hash(text)
     if _is_duplicate(source, content_hash):
         logger.info("중복 텍스트 건너뜀: %s", source)
         return -1
-
-    delete_source(source)
 
     doc_metadata = {"source": source, "page": 0, "content_hash": content_hash}
     if metadata:
@@ -138,14 +154,18 @@ def ingest_text(text: str, source: str, metadata: dict | None = None) -> int:
     if not chunks:
         return 0
 
-    vectorstore = get_vectorstore()
-    vectorstore.add_documents(chunks)
+    with _db_lock:
+        _delete_source_unlocked(source)
+        vectorstore = get_vectorstore()
+        vectorstore.add_documents(chunks)
 
+    elapsed = time.time() - start
+    logger.info("텍스트 인덱싱 완료: %s | %d 청크 | %.2f초", source, len(chunks), elapsed)
     return len(chunks)
 
 
-def delete_source(source_name: str) -> int:
-    """특정 소스의 모든 청크를 벡터DB에서 삭제. 삭제된 수 반환."""
+def _delete_source_unlocked(source_name: str) -> int:
+    """lock 없이 소스 삭제 (내부 전용 — 호출자가 _db_lock을 잡고 있어야 함)."""
     vectorstore = get_vectorstore()
     collection = vectorstore._collection
     results = collection.get(where={"source": source_name}, include=[])
@@ -153,6 +173,15 @@ def delete_source(source_name: str) -> int:
     if ids:
         collection.delete(ids=ids)
     return len(ids)
+
+
+def delete_source(source_name: str) -> int:
+    """특정 소스의 모든 청크를 벡터DB에서 삭제. 삭제된 수 반환."""
+    with _db_lock:
+        deleted = _delete_source_unlocked(source_name)
+    if deleted:
+        logger.info("소스 삭제: %s (%d 청크)", source_name, deleted)
+    return deleted
 
 
 def search(query: str, k: int = 4):

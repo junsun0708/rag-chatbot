@@ -1,8 +1,14 @@
 """외부 서비스 연동 API — Confluence, Notion"""
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+
+from ..auth import verify_api_key
 from ..vectorstore import ingest_text
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 
@@ -11,14 +17,14 @@ router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 
 
 class ConfluenceRequest(BaseModel):
-    url: str  # e.g. https://your-domain.atlassian.net
-    username: str
-    api_token: str
-    space_key: str
-    limit: int = 50
+    url: str = Field(..., min_length=1)
+    username: str = Field(..., min_length=1)
+    api_token: str = Field(..., min_length=1)
+    space_key: str = Field(..., min_length=1, max_length=50, pattern=r"^[A-Za-z0-9_~-]+$")
+    limit: int = Field(default=50, ge=1, le=100)
 
 
-@router.post("/confluence/sync")
+@router.post("/confluence/sync", dependencies=[Depends(verify_api_key)])
 def sync_confluence(req: ConfluenceRequest):
     try:
         from atlassian import Confluence
@@ -31,7 +37,8 @@ def sync_confluence(req: ConfluenceRequest):
             req.space_key, start=0, limit=req.limit, expand="body.storage"
         )
     except Exception as e:
-        raise HTTPException(400, f"Confluence 연결 실패: {str(e)}")
+        logger.error("Confluence 연결 실패: space_key=%s, error=%s", req.space_key, e)
+        raise HTTPException(400, "Confluence 연결에 실패했습니다. URL과 인증 정보를 확인해주세요.")
 
     total_chunks = 0
     synced_pages = []
@@ -60,6 +67,8 @@ def sync_confluence(req: ConfluenceRequest):
         total_chunks += chunks
         synced_pages.append(title)
 
+    logger.info("Confluence 동기화 완료: space=%s, pages=%d, chunks=%d", req.space_key, len(synced_pages), total_chunks)
+
     return {
         "pages_synced": len(synced_pages),
         "total_chunks": total_chunks,
@@ -72,13 +81,13 @@ def sync_confluence(req: ConfluenceRequest):
 
 
 class NotionRequest(BaseModel):
-    api_key: str  # Notion Integration Token
+    api_key: str = Field(..., min_length=1)
     database_id: str = ""
     page_ids: list[str] = []
-    limit: int = 50
+    limit: int = Field(default=50, ge=1, le=100)
 
 
-@router.post("/notion/sync")
+@router.post("/notion/sync", dependencies=[Depends(verify_api_key)])
 def sync_notion(req: NotionRequest):
     try:
         from notion_client import Client as NotionClient
@@ -88,7 +97,8 @@ def sync_notion(req: NotionRequest):
     try:
         notion = NotionClient(auth=req.api_key)
     except Exception as e:
-        raise HTTPException(400, f"Notion 연결 실패: {str(e)}")
+        logger.error("Notion 연결 실패: %s", e)
+        raise HTTPException(400, "Notion 연결에 실패했습니다. API 키를 확인해주세요.")
 
     pages_to_process = []
 
@@ -98,7 +108,8 @@ def sync_notion(req: NotionRequest):
             results = notion.databases.query(database_id=req.database_id, page_size=req.limit)
             pages_to_process.extend(results.get("results", []))
         except Exception as e:
-            raise HTTPException(400, f"Notion 데이터베이스 조회 실패: {str(e)}")
+            logger.error("Notion 데이터베이스 조회 실패: db_id=%s, error=%s", req.database_id, e)
+            raise HTTPException(400, "Notion 데이터베이스 조회에 실패했습니다. 데이터베이스 ID를 확인해주세요.")
 
     # 개별 페이지 ID로 가져오기
     for page_id in req.page_ids:
@@ -106,6 +117,7 @@ def sync_notion(req: NotionRequest):
             page = notion.pages.retrieve(page_id=page_id)
             pages_to_process.append(page)
         except Exception as e:
+            logger.warning("Notion 페이지 조회 실패: page_id=%s, error=%s", page_id, e)
             continue
 
     total_chunks = 0
@@ -130,6 +142,8 @@ def sync_notion(req: NotionRequest):
         chunks = ingest_text(text, source, metadata={"type": "notion", "page_id": page_id})
         total_chunks += chunks
         synced_pages.append(title)
+
+    logger.info("Notion 동기화 완료: pages=%d, chunks=%d", len(synced_pages), total_chunks)
 
     return {
         "pages_synced": len(synced_pages),
